@@ -1,0 +1,485 @@
+---
+title: 'Teste de modelos de classificação para satisfação de usuários'
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+##### **Lucas Marra e Thais D. M. Ferreira** 
+
+
+### **Introdução:**
+
+Como parte do exercício de análise do banco do dados de pesquisa de telefonia móvel, serão testados **4 modelos de classificação** com o objetivo de selecionar o modelo com **melhor desempenho preditivo** para a satisfação dos usuários (alta ou baixa). A Base de dados foi tratada e analisada anteriormente em **Python**. Os modelos selecionados foram:
+  
+i)    **Logística**;  
+ii)   **Random Forest**;  
+iii)  **Boosting**;    
+iv)   **LASSO**    
+
+
+&nbsp;
+&nbsp;
+&nbsp;
+
+
+#### **Importação de bibliotecas:**
+
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, cache=TRUE}
+library(readxl)     
+library(tidyverse)
+library(GGally)
+library(skimr)
+library(pROC)
+library(glmnet)
+library(plotmo)
+library(skimr)
+library(leaps)
+library(randomForest)
+library(MASS)
+library(openxlsx)
+library(readxl)
+library(xgboost)
+library(gbm)
+```
+
+#### **Leitura da base de dados**
+
+&nbsp;
+
+O primeiro passo é importar a base de dados tratada via Python, arquivo que foi gerado com o nome de BD_Pre_Tratado através do código abaixo.
+
+```{r cache=TRUE}
+dados_raw<- read_excel("data/BD_Pre_Tratado.xlsx")
+dados_raw <- na.omit(dados_raw)
+
+```
+
+```{r}
+head(dados_raw)
+```
+
+
+
+Agora, com a base de dados inserida, podemos iniciar as etapas de modelagem.
+
+&nbsp;
+
+Para as notas de satisfação com valores maiores/iguais a 8, a classificação de satisfacao é "Alta", do contrario serao classificada como "Baixa". Para atendermos esta condição, foi utilizado o codigo abaixo como forma de classificar tais notas, representadas pela variável **J1** da base de dados.
+
+
+
+```{r cache=TRUE}
+dados <- dados_raw %>% 
+  mutate(J1 = factor(ifelse(J1 >= 8, "Alta", "Baixa"), 
+                          levels = c("Baixa", "Alta")))
+
+head(dados)
+
+```
+
+
+&nbsp;
+
+Para fins de conhecimento de quantas classificações temos como "Alta" e "Baixa", imprimimos a quantidade de observações contidas na variável J1, conforme abaixo:
+
+```{r cache=TRUE}
+table(dados$J1)
+```
+
+&nbsp;
+
+É possível observar que, da forma a qual tratamos a base e os critérios de avaliação de nota adotados, a maior parte dos entrevistados, 51,2%, classificou a satisfação com sua operadora como "Alta", contra 49,8% como "Baixa". Ou seja, se formos classificar a nota dada pelos usuários de uma forma binária, percebe-se uma amostra bem equilibrada entre as opiniões.
+
+&nbsp;
+&nbsp;
+
+### **Modelagem preditiva via regressoes Logistica, Random Forest, Boosting e LASSO**.
+
+&nbsp;
+
+A seguir, veremos o passo a passo dos codigos utilizados e os resultados obtidos para cada uma das regressoes, 
+
+&nbsp;
+
+###  **1) Regressao Logistica**
+
+&nbsp;
+
+No código abaixo geramos a base de treino e teste a partir do dataframe, e em seguida ajustamos a regressão Logistica, representada por `fit_logistica_TT`.
+
+```{r cache=TRUE}
+dados_Log <- dados
+
+
+set.seed(1)
+
+treino_Log <- sample(nrow(dados_Log), .8*nrow(dados_Log), replace =  FALSE)
+
+dados_treino_Log <- dados_Log[treino_Log,]
+dados_teste_Log <- dados_Log[-treino_Log,]
+
+#Ajustando pela regressÃ£o logistica
+fit_logisticaTT <- glm(J1 ~ ., family = "binomial", data = dados_treino_Log)
+
+
+```
+&nbsp;
+
+A seguir, rodamos as probabilidades do modelo para gerarmos uma base de dados com os resultados observados e os estimados.
+
+```{r cache=TRUE}
+
+#Obtendo probabilidades
+prob_fit_logistica_TT <- predict(fit_logisticaTT, dados_teste_Log, type = "response")
+
+#head(prob_fit_logistica_TT)
+
+
+#criando base de dados com os resultados observado e as probs
+estimativas_fit_logistica_TT <- tibble(observado = dados_teste_Log$J1, probabilidade = prob_fit_logistica_TT)
+
+plot(estimativas_fit_logistica_TT)
+
+```
+
+&nbsp;
+
+Agora, após rodar a regressão e as previsões para o modelo, realizaremos a comparação com os resultados observados e os estimados, utilizando a função `roc`, a qual utilizamos para calcular a AUC (area under the curve), para identificar o % de acertos do modelo de previsão.
+
+Abaixo, o calculo da curva ROC, representado pela variável `roc_fit logistica _TT`:
+
+&nbsp;
+
+```{r cache=TRUE}
+
+# Curva ROC
+roc_fit_logistica_TT <- estimativas_fit_logistica_TT %>% 
+                    roc(observado, probabilidade)
+
+#Rodando curva ROC, obtendo resultado de AUC = 0,8888
+
+plot(roc_fit_logistica_TT)
+
+```
+&nbsp;
+
+```{r}
+roc_fit_logistica_TT
+
+```
+
+&nbsp;
+
+Quando imprimimos `roc_fit_logistica_TT` obtivemos uma AUC de 0,8888, ou seja, o modelo tem em media **88,88% de acertos** em suas previsoes.
+
+&nbsp;
+
+
+### **2) Random Forest**
+
+&nbsp;
+
+Antes de iniciar a Random Forest, é necessário transformar as variáveis string para factor:
+
+```{r}
+dados_rf <- dados
+
+
+### Transformando variaveis chr em fct
+dados_rf$OPERADORA <- as.factor(dados_rf$OPERADORA)
+dados_rf$ESTADO <- as.factor(dados_rf$ESTADO)
+
+head(dados_rf)
+
+```
+
+&nbsp;
+&nbsp;
+
+Com o código abaixo vamos rodar a regressão Random Forest:
+
+```{r cache=TRUE}
+set.seed(1)
+linhas_rf <- sample(1:nrow(dados_rf), .3*nrow(dados_rf))
+
+### funcao para regressao Random forest
+rf <- randomForest(J1 ~ ., data = dados_rf[linhas_rf,])
+
+```
+
+&nbsp;
+
+Abaixo, um exemplo de como a construção de uma determinada quantidade de árvores tende a reduzir o erro e, conforme seu numero vai aumentando, temos uma estabilização do OOB.
+
+Para este caso, observamos que este numero se torna praticamente estável a partir de aproximadamente 300 árvores.
+
+```{r cache=TRUE}
+### Construcao de dataframe e plot com erro de classficacao para cada uma das 500 arvores
+tibble(arvore = 1:nrow(rf$err.rate),
+       oob = rf$err.rate[,1]) %>%
+  ggplot(aes(arvore, oob)) +
+  geom_line(color = "blue", size = 1.2) +
+  ylab("Erro de Classificacao (OOB)") +
+  xlab("Numero de Arvores") + theme_bw()
+
+```
+
+&nbsp;
+
+O modelo também foi testato para outros valores de split, mas o mtry=4 acabou sendo realmente o de menor variacao.
+
+
+```{r cache=TRUE}
+
+resultados <- tibble(mtry = 4, arvore = 1:nrow(rf$err.rate),oob = rf$err.rate[,1])
+
+
+resultados %>%
+  mutate(mtry = factor(mtry)) %>%
+  ggplot(aes(arvore, oob, group = mtry, color = mtry)) +
+  geom_line( size = 1.2) +
+  ylab("Erro de Classificacao (OOB)") +
+  xlab("Numero de arvores") + theme_bw()
+```
+
+
+Atráves do código abaixo, pudemos realizar a visuaçização da importancia das variaveis dentro do modelo de regressão gerado.
+
+```{r cache=TRUE}
+
+# Importancia de cada variavel
+varImpPlot(rf, pch = 15)
+
+
+```
+&nbsp;
+
+
+Matriz de confusão gerada a partir da classficação RF:
+```{r cache=TRUE}
+rf
+```
+
+&nbsp;
+
+Agora, vamos realizar o calculo das predições e verificar a curva ROC e a AUC correspondente:
+```{r cache=TRUE}
+# Criação de conjunto de teste
+J1_test <- dados_rf[-linhas_rf,]
+
+
+predito_rf_prob <- predict(rf, newdata = J1_test, type = "prob")
+roc_rf <- roc(J1_test$J1, predito_rf_prob[,1])
+
+# curva roc_rf gerando uma AUC de 0.8936
+roc_rf
+
+```
+&nbsp;
+
+
+Através do comando `roc_rf`podemos chegar ao resultado de **AUC de 89,36%** para o **modelo RF** rodado.
+
+Abaixo a plotagem da curva ROC para o modelo RF:
+```{r}
+plot(roc_rf)
+```
+&nbsp;
+&nbsp;
+
+### **3) Boosting**
+
+
+Assim como na Random Forest, tambémé necessário transformar as variáveis string para factor antes de iniciar o modelo de Boosting:
+
+```{r cache=TRUE}
+dados_import_bst <- read_excel("data/BD_Pre_Tratado.xlsx")
+
+
+### Transformando variaveis chr em fct
+dados_import_bst$OPERADORA <- as.factor(dados_import_bst$OPERADORA)
+dados_import_bst$ESTADO <- as.factor(dados_import_bst$ESTADO)
+
+
+### Remover possíveis NAs
+dados_bst <- na.omit(dados_import_bst)
+
+
+### Variavel de J1 (Satisfaçao) transformada e "Alta" ou "Baixa"
+dados_bst <- dados_bst %>%
+  mutate(J1 = factor(ifelse(J1 >= 8, "Alta", "Baixa"),
+                     levels = c("Baixa", "Alta")))
+
+```
+
+
+
+Criação de conjuntos de treinamento e teste:
+
+```{r cache=TRUE}
+
+set.seed(1)
+
+linhas <- sample(nrow(dados_bst), .5*nrow(dados_bst))
+dados_tr   <- dados_bst[linhas, ]
+dados_test <- dados_bst[-linhas,]
+
+```
+
+
+
+Transformação da variavel J1 em 0 e 1 (dist. Bernoulli).
+
+Em seguida, criacao da funcao fit para o modelo boosting:
+```{r cache=TRUE}
+
+# Transformacao de variavel de satisfacao em 0 ou 1
+dados_tr$J1 <- ifelse(dados_tr$J1 == "Alta", 1, 0)
+dados_test$J1 <- ifelse(dados_test$J1 == "Alta", 1, 0)
+
+
+(fit_bst <- gbm(J1 ~ ., distribution = "bernoulli", 
+                n.trees = 1000, interaction.depth = 4, 
+                shrinkage = 0.05, data = dados_tr))
+```
+
+
+Geração das probabilidades do modelo e ajustando para que se enquadrem no padrao 0 e 1, onde quando a probabilidade for igual/maior que 5, teremos uma classificacao como 1, caso contrario 0.
+```{r cache=TRUE}
+
+### Probabilidade de dados teste
+prob_bst <- predict(fit_bst, dados_test, n.trees = 1000, type = "response")
+
+### Transforma probabilidade em binário
+predito_bst <- ifelse(prob_bst >= .5, 1, 0)
+
+```
+
+
+Verificando a media entre os valores observados da amostra de teste que diferem dos estimados pelo modelo 
+```{r cache=TRUE}
+mean(dados_test$J1 != predito_bst)
+```
+
+Desta forma, podemos dizer que o % de acerto do modelo testado é **81,36%**.
+
+&nbsp;
+&nbsp;
+
+### **4) LASSO**
+
+&nbsp;
+
+Importando base de dados:
+```{r cache=TRUE}
+dados_import_LSS <- read_excel("data/BD_Pre_Tratado.xlsx")
+```
+
+&nbsp;
+
+Classificando a satisfação do cliente entre "Alta" (nota maior/igual a 8) e "Baixa" (nota menor que 8) na variável J1 do questionario:
+
+```{r cache=TRUE}
+dados_import_LSS <- dados_import_LSS %>% 
+  mutate(J1 = factor(ifelse(J1 >= 8, "Alta", "Baixa"), 
+                     levels = c("Baixa", "Alta")))
+
+
+# Eliminando possíveis celular sem preenchimento
+dados_LSS <- na.omit(dados_import_LSS)
+```
+
+&nbsp;
+
+Verificando dados importados:
+
+```{r cache=TRUE}
+head(dados_import_LSS)
+```
+
+&nbsp;
+
+Montagem da base para treino e teste:
+```{r cache=TRUE}
+X <- model.matrix(J1 ~ ., data = dados_LSS[,-1])[,-1] 
+y <- dados_LSS$J1
+
+set.seed(1) 
+
+idx <- sample(nrow(dados_LSS), size = .8*nrow(dados_LSS), replace = FALSE) # indice treinamento
+```
+&nbsp;
+
+Rodando LASSO com o indice de treino:
+
+```{r cache=TRUE}
+lasso <- glmnet(X[idx,], y[idx], alpha = 1, nlambda = 1000, family = "binomial") 
+```
+&nbsp;
+
+Ajustando o modelo com o lambda otimo:
+
+```{r cache=TRUE}
+cv_lasso <- cv.glmnet(X[idx,], y[idx], alpha = 1, lambda = lasso$lambda, family = "binomial")
+plot(cv_lasso, cex.lab = 1.3)
+```
+&nbsp;
+
+Obtendo as predições para a classificação LASSO:
+
+```{r cache=TRUE}
+prob_lasso <- predict(lasso, newx = X[-idx,], s = cv_lasso$lambda.min, type = "response")
+
+```
+&nbsp;
+
+Criando dataframe com os resultados observados e as estimativas geradas:
+
+```{r cache=TRUE}
+estimativa_lasso <- tibble(observado = y[-idx], probabilidade = prob_lasso)
+
+```
+
+&nbsp;
+
+Curva ROC e a AUC estimada:
+
+```{r cache=TRUE}
+roc_lasso <- estimativa_lasso %>% 
+  roc(observado, probabilidade)
+
+#Rodando curva ROC, obtendo resultado de AUC = 0,89
+roc_lasso
+```
+&nbsp;
+
+```{r cache=TRUE}
+plot(roc_lasso)
+```
+&nbsp;
+
+Podemos observar atraves da AUC obtida pela curva ROC que o % de acertos deste modelo é de **88,88%**.
+
+&nbsp;
+&nbsp;
+
+### **Resumo dos resultados para os modelos testados:**
+
+&nbsp;
+
+Através dos metodos escolhidos, obtivemos os resultados abaixo para os modelos testados:
+
+i)    **Logistica:**     88,88%
+ii)   **Random Forest:** 89,36%
+iii)  **Boosting:**      81,36%
+iv)   **LASSO:**         88,88%
+
+&nbsp;
+
+Observa-se que o **Random Forest** apresentou um melhor desempenho preditivo de classificação para a base de dados de telefonia analisada.
+
+&nbsp;
+&nbsp;
